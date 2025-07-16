@@ -84,7 +84,7 @@ async function findAndConnectToArduino() {
     console.log(`Arduino found on port: ${arduinoPortInfo.path}`);
     serialPort = new SerialPort({
       path: arduinoPortInfo.path,
-      baudRate: 9600,
+      baudRate: 115200,
     });
 
     setupSerialCommunication();
