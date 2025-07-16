@@ -14,7 +14,7 @@ const unsigned long COLLECTION_DURATION = 15000; // 15s
 const unsigned long COOLDOWN_DURATION   = 40000; // 40s
 
 // --- sensor
-const int IDLE_THRESHOLD = 400;
+const int IDLE_THRESHOLD = 5;
 const int SAMPLING_DELAY = 20;     // 20 ms ≈ 50 Hz
 
 // --- simple moving average filter
@@ -45,6 +45,8 @@ void loop() {
       {
         digitalWrite(LED_STATUS, LOW); // LED off during idle
         float gsrValue = readGSR();
+        gsrValue = gsrValue - 1005;
+        gsrValue=gsrValue*10;
         if (gsrValue >= IDLE_THRESHOLD) {
           currentState = DETECTING;
           stateChangeTime = millis();
@@ -75,6 +77,8 @@ void loop() {
         digitalWrite(LED_STATUS, (millis() / 500) % 2); 
         
         float gsrValue = readGSR();
+        gsrValue = gsrValue - 1005;
+        gsrValue = gsrValue*10;
         gsrSum += gsrValue;
         gsrCount++;
 
