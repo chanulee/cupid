@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Halftone Contour Visualizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f0f0f0;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+<script>
+// --- Configuration ---
+const params = {
+    // Mode settings
+    mode: 'Loading', // 'Loading' or 'Result'
+    resultMethod: 'Complexity', // 'Complexity' or 'Resonance'
+    metricValue: 75, // The metric to display in result mode (0-100)
+
+    // Blob shape settings (for Loading mode)
+    noiseScale: 0.5,
+    noiseSpeed: 0.01,
+    blobFactor: 0.6, // How much of the canvas the blob influences
+
+    // Halftone grid settings
+    spacing: 15,
+    minDotSize: 0,
+    maxDotSize: 15,
+
+    // Zone of Interest settings (shared by all modes)
+    zoneOfInterest: true,
+    zoneRadius: 300,
+    edgeSoftness: 20, // Controls the fade at the circle's edge
+
+    // Resonance-specific settings
+    resonanceSharpness: 4.0,
+    resonanceSmoothness: 2.0,
+
+    // Color settings
+    dotColor: [0, 0, 0],
+    backgroundColor: [255, 255, 255],
+    
+    // Invert the effect
+    invert: false,
+
+    // Export settings
+    saveAsPNG: () => exportTransparentPNG(),
+};
+
+// --- p5.js Sketch ---
+let gui; // Make GUI globally accessible
+
+// GUI controllers for dynamic visibility
+let savePNGController;
+
+function setup() {
+    createCanvas(windowWidth, windowHeight);
+    
+    // --- GUI Setup ---
+    gui = new dat.GUI();
+
+    const modeFolder = gui.addFolder('Mode & Metric');
+    modeFolder.add(params, 'mode', ['Loading', 'Result']).name('Display Mode').onChange(updateGUI);
+    modeFolder.add(params, 'resultMethod', ['Complexity', 'Resonance']).name('Result Method').onChange(updateGUI);
+    modeFolder.add(params, 'metricValue', 0, 100).name('Metric (0-100)').onChange(updateGUI);
+    modeFolder.open();
+    
+    const blobFolder = gui.addFolder('Shape & Motion (Loading)');
+    blobFolder.add(params, 'noiseScale', 0.1, 2.0).name('Complexity').onChange(updateGUI);
+    blobFolder.add(params, 'noiseSpeed', 0, 0.05).name('Animation Speed').onChange(updateGUI);
+    blobFolder.add(params, 'blobFactor', 0.1, 1.5).name('Size').onChange(updateGUI);
+    blobFolder.open();
+
+    const halftoneFolder = gui.addFolder('Halftone Effect');
+    halftoneFolder.add(params, 'spacing', 5, 50).name('Grid Spacing').onChange(updateGUI);
+    halftoneFolder.add(params, 'minDotSize', 0, 20).name('Min Dot Size').onChange(updateGUI);
+    halftoneFolder.add(params, 'maxDotSize', 0, 50).name('Max Dot Size').onChange(updateGUI);
+    halftoneFolder.add(params, 'invert').name('Invert Effect').onChange(updateGUI);
+    halftoneFolder.open();
+
+    const zoneFolder = gui.addFolder('Zone of Interest');
+    zoneFolder.add(params, 'zoneOfInterest').name('Active').onChange(updateGUI);
+    zoneFolder.add(params, 'zoneRadius', 50, Math.min(windowWidth, windowHeight) / 2).name('Radius').onChange(updateGUI);
+    zoneFolder.add(params, 'edgeSoftness', 0, 100).name('Edge Softness').onChange(updateGUI);
+    zoneFolder.open();
+    
+    const resonanceFolder = gui.addFolder('Resonance Settings');
+    resonanceFolder.add(params, 'resonanceSharpness', 1.0, 20.0).name('Sharpness').onChange(updateGUI);
+    resonanceFolder.add(params, 'resonanceSmoothness', 0.5, 5.0).name('Smoothness').onChange(updateGUI);
+    resonanceFolder.open();
+
+    const exportFolder = gui.addFolder('Export');
+    savePNGController = exportFolder.add(params, 'saveAsPNG').name('Save as PNG');
+    exportFolder.open();
+
+    const colorFolder = gui.addFolder('Colors');
+    colorFolder.addColor(params, 'dotColor').name('Dot Color').onChange(updateGUI);
+    colorFolder.addColor(params, 'backgroundColor').name('Background').onChange(updateGUI);
+    colorFolder.open();
+
+    // Initial setup
+    updateGUI();
+}
+
+function updateGUI() {
+    // Show/hide controls based on the current mode
+    const isResultMode = params.mode === 'Result';
+    const isLoadingMode = params.mode === 'Loading';
+    const isResonance = params.resultMethod === 'Resonance';
+
+    // Toggle visibility of controllers and folders
+    savePNGController.domElement.style.display = isResultMode ? 'block' : 'none';
+    gui.__folders['Shape & Motion (Loading)'].domElement.style.display = isLoadingMode ? 'block' : 'none';
+    gui.__folders['Resonance Settings'].domElement.style.display = (isResultMode && isResonance) ? 'block' : 'none';
+    
+    handleLooping();
+    draw(); // Redraw canvas when GUI changes
+}
+
+function exportTransparentPNG() {
+    // To save with a transparent background, we clear the canvas,
+    // redraw the visuals without the background color, save it,
+    // and then redraw everything to restore the view.
+    clear(); // Clears the canvas to be transparent
+    renderVisuals(); // Draw just the dots
+    saveCanvas('result-image', 'png'); // Save the transparent image
+    draw(); // Redraw with the background to restore the on-screen view
+}
+
+function handleLooping() {
+    // Loop only if in loading mode with animation speed.
+    if (params.mode === 'Loading' && params.noiseSpeed > 0) {
+        loop();
+    } else {
+        noLoop();
+    }
+}
+
+// This function contains the core drawing logic,
+// so it can be called independently for transparent export.
+function renderVisuals() {
+    for (let y = 0; y < height; y += params.spacing) {
+        for (let x = 0; x < width; x += params.spacing) {
+            
+            const distFromCenter = dist(x, y, width / 2, height / 2);
+            let edgeScaleFactor = 1.0;
+
+            if (params.zoneOfInterest) {
+                const softEdgeBoundary = params.zoneRadius - params.edgeSoftness;
+                if (distFromCenter > params.zoneRadius) {
+                    continue; 
+                } else if (distFromCenter > softEdgeBoundary) {
+                    edgeScaleFactor = map(distFromCenter, softEdgeBoundary, params.zoneRadius, 1, 0);
+                }
+            }
+
+            let dotIntensity = 0; 
+            let currentMaxDotSize = params.maxDotSize;
+
+            if (params.mode === 'Loading') {
+                const timeOffset = frameCount * params.noiseSpeed;
+                const noiseVal = noise(
+                    x * params.noiseScale * 0.01, 
+                    y * params.noiseScale * 0.01, 
+                    timeOffset
+                );
+                dotIntensity = noiseVal - (distFromCenter / (width * params.blobFactor));
+
+            } else { // 'Result' mode
+                if (params.resultMethod === 'Complexity') {
+                    const currentNoiseScale = map(params.metricValue, 0, 100, 0.4, 2.5);
+                    const timeOffset = 1000;
+                    currentMaxDotSize = map(params.metricValue, 0, 100, params.maxDotSize * 0.2, params.maxDotSize);
+                    const noiseVal = noise(
+                        x * currentNoiseScale * 0.01, 
+                        y * currentNoiseScale * 0.01, 
+                        timeOffset
+                    );
+                    dotIntensity = noiseVal - (distFromCenter / (width * params.blobFactor));
+
+                } else { // 'Resonance' method (Chladni Figures)
+                    const modes = [
+                        [1, 2], [2, 1], [1, 3], [3, 1], [2, 3], [3, 2],
+                        [1, 4], [4, 1], [3, 4], [4, 3], [1, 5], [5, 1],
+                        [2, 5], [5, 2], [3, 5], [5, 3], [4, 5], [5, 4]
+                    ];
+                    
+                    const continuousIndex = map(params.metricValue, 0, 100, 0, modes.length - 1);
+                    const index1 = floor(continuousIndex);
+                    const index2 = ceil(continuousIndex);
+                    const lerpFactor = continuousIndex - index1;
+
+                    const n1 = modes[index1][0];
+                    const m1 = modes[index1][1];
+                    const n2 = modes[index2][0];
+                    const m2 = modes[index2][1];
+
+                    const nx = map(x, 0, width, -PI, PI);
+                    const ny = map(y, 0, height, -PI, PI);
+
+                    const chladniVal1 = cos(n1 * nx) * cos(m1 * ny) - cos(m1 * nx) * cos(n1 * ny);
+                    const chladniVal2 = cos(n2 * nx) * cos(m2 * ny) - cos(m2 * nx) * cos(n2 * ny);
+
+                    const calculateSandValue = (val) => {
+                        return exp(-params.resonanceSharpness * val * val);
+                    };
+
+                    const sandValue1 = calculateSandValue(chladniVal1);
+                    const sandValue2 = calculateSandValue(chladniVal2);
+                    
+                    let rawIntensity = lerp(sandValue1, sandValue2, lerpFactor);
+                    dotIntensity = pow(rawIntensity, params.resonanceSmoothness);
+                }
+            }
+            
+            let targetSize = map(constrain(dotIntensity, 0, 1), 0, 1, params.minDotSize, currentMaxDotSize);
+
+            if (params.invert) {
+                targetSize = (params.minDotSize + currentMaxDotSize) - targetSize;
+            }
+            
+            targetSize *= edgeScaleFactor;
+
+            if (targetSize > 0.1) {
+                fill(params.dotColor);
+                noStroke();
+                circle(x, y, targetSize);
+            }
+        }
+    }
+}
+
+function draw() {
+    background(params.backgroundColor);
+    handleLooping();
+    renderVisuals();
+}
+
+function windowResized() {
+    resizeCanvas(windowWidth, windowHeight);
+    for (let i in gui.__folders['Zone of Interest'].__controllers) {
+        const controller = gui.__folders['Zone of Interest'].__controllers[i];
+        if (controller.property === 'zoneRadius') {
+            controller.max(Math.min(windowWidth, windowHeight) / 2);
+        }
+    }
+    draw();
+}
+
+</script>
+</body>
+</html>
