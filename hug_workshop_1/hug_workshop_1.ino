@@ -1,92 +1,112 @@
+#include <Arduino.h>
+
 /* ------------------------------------------------------------
- *  Hug Workshop – GSR Δ-Oxytocin Proxy
- *  Board  : Arduino Nano / Uno
- *  Sensor : GSR Sensor V2  → A0
- *  Author : Hanna’s workshop, 2025
+ *  Cupid - GSR Interaction Logic
+ *  Board  : Arduino Uno
+ *  Sensor : GSR Sensor V2  → A3
  * ---------------------------------------------------------- */
 const int GSR_PIN      = A3;    // Signal pin
 const int LED_STATUS   = 13;    // On-board LED
 
 // --- timing (ms)
-const unsigned long BASELINE_MS = 10000;   // 10초(= 10 000 ms)
-const unsigned long HUG_MS      = 30000;   // 30초(= 30 000 ms)
-const int SAMPLING_DELAY        = 20;     // 20 ms ≈ 50 Hz
+const unsigned long DETECTION_DURATION  = 2000;  // 2s
+const unsigned long COLLECTION_DURATION = 15000; // 15s
+const unsigned long COOLDOWN_DURATION   = 40000; // 40s
+
+// --- sensor
+const int IDLE_THRESHOLD = 400;
+const int SAMPLING_DELAY = 20;     // 20 ms ≈ 50 Hz
 
 // --- simple moving average filter
 const int BUF_LEN = 10;
 int   buf[BUF_LEN];
 byte  idx = 0;
 
+// --- state machine
+enum State { IDLE, DETECTING, COLLECTING, COOLDOWN };
+State currentState = IDLE;
+
+// --- timers and data
+unsigned long stateChangeTime = 0;
+float gsrSum = 0;
+int   gsrCount = 0;
+
 // ------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
   pinMode(LED_STATUS, OUTPUT);
-  for (int i = 0; i < BUF_LEN; i++) buf[i] = 0;
-
-  Serial.println(F("=== GSR Hug Experiment – ready ==="));
-  Serial.println(F(">> 10 s baseline (stay calm)"));
+  for (int i = 0; i < BUF_LEN; i++) buf[i] = 0; // initialize buffer
 }
 
 // ------------------------------------------------------------
 void loop() {
-  // -------- 1) Baseline 10 s --------
-  digitalWrite(LED_STATUS, LOW);        // LED off = baseline
-  float baseSum = 0;  int baseCnt = 0;
-  unsigned long t0 = millis();
-  while (millis() - t0 < BASELINE_MS) {
-    float v = readGSR();
-    baseSum += v;  baseCnt++;
-    delay(SAMPLING_DELAY);
+  switch (currentState) {
+    case IDLE:
+      {
+        digitalWrite(LED_STATUS, LOW); // LED off during idle
+        float gsrValue = readGSR();
+        if (gsrValue >= IDLE_THRESHOLD) {
+          currentState = DETECTING;
+          stateChangeTime = millis();
+        }
+      }
+      break;
+
+    case DETECTING:
+      {
+        digitalWrite(LED_STATUS, HIGH); // LED on to show it's detecting
+        float gsrValue = readGSR();
+        if (gsrValue < IDLE_THRESHOLD) {
+          currentState = IDLE; // False alarm, go back to idle
+        } else if (millis() - stateChangeTime >= DETECTION_DURATION) {
+          Serial.println(0); // Send 0 to frontend
+          currentState = COLLECTING;
+          stateChangeTime = millis();
+          gsrSum = 0;
+          gsrCount = 0;
+        }
+        // No delay here to be responsive
+      }
+      break;
+
+    case COLLECTING:
+      {
+        // LED blinks during collection to show activity
+        digitalWrite(LED_STATUS, (millis() / 500) % 2); 
+        
+        float gsrValue = readGSR();
+        gsrSum += gsrValue;
+        gsrCount++;
+
+        if (millis() - stateChangeTime >= COLLECTION_DURATION) {
+          float gsrAvg = (gsrCount > 0) ? (gsrSum / gsrCount) : 0;
+          Serial.println(gsrAvg);
+          currentState = COOLDOWN;
+          stateChangeTime = millis();
+        }
+        delay(SAMPLING_DELAY); // Sample at defined rate
+      }
+      break;
+
+    case COOLDOWN:
+      {
+        digitalWrite(LED_STATUS, LOW); // LED off during cooldown
+        if (millis() - stateChangeTime >= COOLDOWN_DURATION) {
+          currentState = IDLE;
+        }
+        // No action or delay, just waiting
+      }
+      break;
   }
-  float baseAvg = baseSum / baseCnt;
-  Serial.print(F("Baseline avg : ")); Serial.println(baseAvg, 1);
-
-  // -------- 2) Hug 30 s -------------
-  Serial.println(F(">> Please start hugging (15 s)"));
-  digitalWrite(LED_STATUS, HIGH);       // LED on = hug phase
-  float hugSum = 0;    int hugCnt = 0;
-  t0 = millis();
-  while (millis() - t0 < HUG_MS) {
-    float v = readGSR();
-    hugSum += v;   hugCnt++;
-    delay(SAMPLING_DELAY);
-  }
-  float hugAvg = hugSum / hugCnt;
-  Serial.print(F("Hug avg      : ")); Serial.println(hugAvg, 1);
-
-  // -------- 3) Δ 계산 & 점수 ----------
-  float delta = hugAvg - baseAvg;     // 음수면 이완
-  float score = (-delta) * 0.5;       // 스케일 팩터(0.5) – 자유 조정
-  if (score < 0) score = 0;
-
-  Serial.print(F("Δ (hug-base) : ")); Serial.println(delta, 1);
-  Serial.print(F("Calm-Score   : ")); Serial.println(score, 1);
-  Serial.println(F("-----------------------------------"));
-
-  // LED 깜빡여 결과 알림
-  blinkStatus(int(constrain(score / 20, 1, 5)));
-
-  // 다음 참가자를 위해 15 초 대기
-  delay(15000);
 }
 
-/* ========== 함수들 ========== */
+/* ========== Functions ========== */
 
-// GSR 읽기 + 이동평균
+// Read GSR with moving average filter
 float readGSR() {
   buf[idx] = analogRead(GSR_PIN);          // 0-1023
   idx = (idx + 1) % BUF_LEN;
   long sum = 0;
   for (int i = 0; i < BUF_LEN; i++) sum += buf[i];
   return sum / float(BUF_LEN);
-}
-
-// n번 LED 점멸로 점수 피드백
-void blinkStatus(int n) {
-  for (int i = 0; i < n; i++) {
-    digitalWrite(LED_STATUS, HIGH);
-    delay(200);
-    digitalWrite(LED_STATUS, LOW);
-    delay(200);
-  }
 }
