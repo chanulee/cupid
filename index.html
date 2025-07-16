@@ -30,19 +30,19 @@ const params = {
     metricValue: 75, // The metric to display in result mode (0-100)
 
     // Blob shape settings (for Loading mode)
-    noiseScale: 0.5,
-    noiseSpeed: 0.01,
-    blobFactor: 0.6, // How much of the canvas the blob influences
+    noiseScale: 1.16,
+    noiseSpeed: 0.015,
+    blobFactor: 0.66, // How much of the canvas the blob influences
 
     // Halftone grid settings
-    spacing: 15,
-    minDotSize: 0,
-    maxDotSize: 15,
+    spacing: 6.5,
+    minDotSize: 1,
+    maxDotSize: 12,
 
     // Zone of Interest settings (shared by all modes)
     zoneOfInterest: true,
-    zoneRadius: 300,
-    edgeSoftness: 20, // Controls the fade at the circle's edge
+    zoneRadius: 138,
+    edgeSoftness: 50, // Controls the fade at the circle's edge
 
     // Resonance-specific settings
     resonanceSharpness: 4.0,
@@ -65,8 +65,50 @@ let gui; // Make GUI globally accessible
 // GUI controllers for dynamic visibility
 let savePNGController;
 
+// --- WebSocket Communication ---
+let socket;
+let receivedValue = null;
+let lastReceivedTime = 0;
+const COOLDOWN_PERIOD = 40000; // 40 seconds in ms
+
+// --- State Management ---
+let appState = 'IDLE'; // IDLE, MEASURING, RESULT
+
+// Store parameter sets for different states
+const idleParams = {
+    noiseSpeed: 0.015,
+    maxDotSize: 12,
+    zoneRadius: 138,
+    edgeSoftness: 50,
+    mode: 'Loading',
+    resultMethod: 'Complexity',
+};
+
+const measuringParams = {
+    noiseSpeed: 0.04,
+    maxDotSize: 16,
+    zoneRadius: 339,
+    edgeSoftness: 100,
+    mode: 'Loading',
+    resultMethod: 'Complexity',
+};
+
+const resultParams = {
+    minDotSize: 2.1,
+    maxDotSize: 9.5,
+    zoneRadius: 400,
+    resonanceSharpness: 1,
+    resonanceSmoothness: 3,
+    mode: 'Result',
+    resultMethod: 'Resonance',
+};
+
+
 function setup() {
     createCanvas(windowWidth, windowHeight);
+
+    // --- WebSocket Setup ---
+    connectToWebSocket();
     
     // --- GUI Setup ---
     gui = new dat.GUI();
@@ -111,7 +153,63 @@ function setup() {
     colorFolder.open();
 
     // Initial setup
+    setAppState('IDLE');
     updateGUI();
+}
+
+function setAppState(newState, value = null) {
+    appState = newState;
+    switch (appState) {
+        case 'IDLE':
+            Object.assign(params, idleParams);
+            receivedValue = null;
+            break;
+        case 'MEASURING':
+            Object.assign(params, measuringParams);
+            break;
+        case 'RESULT':
+            Object.assign(params, resultParams);
+            params.metricValue = value;
+            receivedValue = value;
+            lastReceivedTime = millis();
+            break;
+    }
+    updateGUI();
+}
+
+function connectToWebSocket() {
+    socket = new WebSocket('ws://localhost:8080');
+
+    socket.onopen = (event) => {
+        console.log('WebSocket connection opened:', event);
+    };
+
+    socket.onmessage = (event) => {
+        console.log('Received from server:', event.data);
+        if (event.data === 'connected') return;
+        onSerialData(event.data);
+    };
+
+    socket.onclose = (event) => {
+        console.log('WebSocket connection closed:', event);
+        // Optional: try to reconnect
+        setTimeout(connectToWebSocket, 5000);
+    };
+
+    socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+}
+
+function onSerialData(data) {
+    const value = parseFloat(data);
+    if (isNaN(value)) return;
+
+    if (value === 0) {
+        setAppState('MEASURING');
+    } else {
+        setAppState('RESULT', value);
+    }
 }
 
 function updateGUI() {
@@ -124,6 +222,16 @@ function updateGUI() {
     savePNGController.domElement.style.display = isResultMode ? 'block' : 'none';
     gui.__folders['Shape & Motion (Loading)'].domElement.style.display = isLoadingMode ? 'block' : 'none';
     gui.__folders['Resonance Settings'].domElement.style.display = (isResultMode && isResonance) ? 'block' : 'none';
+    
+    // Update all controllers with new param values
+    for (let i in gui.__controllers) {
+        gui.__controllers[i].updateDisplay();
+    }
+    for (let f in gui.__folders) {
+        for (let i in gui.__folders[f].__controllers) {
+            gui.__folders[f].__controllers[i].updateDisplay();
+        }
+    }
     
     handleLooping();
     draw(); // Redraw canvas when GUI changes
@@ -240,10 +348,24 @@ function renderVisuals() {
             }
         }
     }
+
+    // Display the result value if in the correct state
+    if (appState === 'RESULT' && receivedValue !== null) {
+        fill(params.dotColor); // Use dot color for text
+        textSize(32);
+        textAlign(CENTER, BOTTOM);
+        text(receivedValue.toFixed(1), width / 2, height - 20);
+    }
 }
 
 function draw() {
     background(params.backgroundColor);
+
+    // Check for cooldown period
+    if (appState === 'RESULT' && millis() - lastReceivedTime > COOLDOWN_PERIOD) {
+        setAppState('IDLE');
+    }
+
     handleLooping();
     renderVisuals();
 }
@@ -257,6 +379,17 @@ function windowResized() {
         }
     }
     draw();
+}
+
+function keyPressed() {
+    if (key === 'v' || key === 'V') {
+        const guiEl = gui.domElement;
+        if (guiEl.style.display === 'none') {
+            guiEl.style.display = 'block';
+        } else {
+            guiEl.style.display = 'none';
+        }
+    }
 }
 
 </script>
