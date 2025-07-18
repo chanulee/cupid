@@ -63,36 +63,23 @@ function broadcast(message) {
   });
 }
 
-// --- Serial Port Setup with Auto-detection ---
+// --- Serial Port Setup ---
 let serialPort;
 
-async function findAndConnectToArduino() {
+function connectSerialPort() {
   try {
-    const ports = await SerialPort.list();
-    // Look for common Arduino manufacturers. Add others if needed.
-    const arduinoPortInfo = ports.find(p => 
-      p.manufacturer && 
-      (p.manufacturer.includes('Arduino') || p.manufacturer.includes('wch.cn'))
-    );
-
-    if (!arduinoPortInfo) {
-      console.error('Arduino not found. Please check connection. Retrying in 5 seconds...');
-      setTimeout(findAndConnectToArduino, 5000);
-      return;
-    }
-
-    console.log(`Arduino found on port: ${arduinoPortInfo.path}`);
+    console.log(`Attempting to connect to port: /dev/cu.usbserial-1120`);
     serialPort = new SerialPort({
-      path: arduinoPortInfo.path,
+      path: '/dev/cu.usbserial-1120',
       baudRate: 115200,
     });
 
     setupSerialCommunication();
 
   } catch (err) {
-    console.error('Failed during serial port detection:', err);
+    console.error('Failed during serial port connection:', err);
     console.log('Retrying in 5 seconds...');
-    setTimeout(findAndConnectToArduino, 5000);
+    setTimeout(connectSerialPort, 5000);
   }
 }
 
@@ -118,7 +105,7 @@ function setupSerialCommunication() {
   serialPort.on('close', () => {
     console.log('Serial port closed. Attempting to reconnect...');
     serialPort = null; // Clear the port object
-    setTimeout(findAndConnectToArduino, 5000);
+    setTimeout(connectSerialPort, 5000);
   });
 }
 
@@ -158,7 +145,7 @@ app.post('/send', async (req, res) => {
 // Start server
 app.listen(port, () => {
   console.log(`HTTP server running at http://localhost:3000`);
-  findAndConnectToArduino();
+  connectSerialPort();
 });
 
 // Cleanup

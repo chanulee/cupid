@@ -50,6 +50,8 @@ void loop() {
       {
         digitalWrite(LED_STATUS, LOW); // LED off during idle
         float gsrValue = readGSR();
+        gsrValue = gsrValue - 1005;
+        gsrValue=gsrValue*10;
         if (gsrValue >= IDLE_THRESHOLD) {
           currentState = DETECTING;
           stateChangeTime = millis();
@@ -104,6 +106,8 @@ void loop() {
         digitalWrite(LED_STATUS, (millis() / 500) % 2); 
         
         float gsrValue = readGSR();
+        gsrValue = gsrValue - 1005;
+        gsrValue = gsrValue*10;
         gsrSum += gsrValue;
         gsrCount++;
 
